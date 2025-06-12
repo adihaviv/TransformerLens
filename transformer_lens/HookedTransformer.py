@@ -14,9 +14,9 @@ from __future__ import annotations
 import logging
 import os
 from typing import (
+    Any,
     Dict,
     List,
-    Literal,
     NamedTuple,
     Optional,
     Tuple,
@@ -35,9 +35,10 @@ import torch.nn.functional as F
 import tqdm.auto as tqdm
 from jaxtyping import Float, Int
 from packaging import version
-from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from typing_extensions import Literal
 
 import transformer_lens.loading_from_pretrained as loading
 import transformer_lens.utils as utils
@@ -110,6 +111,7 @@ class HookedTransformer(HookedRootModule):
     """
 
     ln_final: nn.Module
+    tokenizer: Optional[PreTrainedTokenizerBase]
 
     def __init__(
         self,
@@ -388,6 +390,8 @@ class HookedTransformer(HookedRootModule):
                 # that pad tokens are not attended.
                 if prepend_bos is USE_DEFAULT_VALUE:
                     prepend_bos = self.cfg.default_prepend_bos
+                if self.tokenizer is None:
+                    raise ValueError("Cannot compute attention mask without a tokenizer.")
                 attention_mask = utils.get_attention_mask(self.tokenizer, tokens, prepend_bos)
 
             assert attention_mask.shape == tokens.shape, (
@@ -732,7 +736,6 @@ class HookedTransformer(HookedRootModule):
         # (https://github.com/huggingface/transformers/issues/25886).
         tokenizer_with_bos = utils.get_tokenizer_with_bos(tokenizer)
         self.tokenizer = tokenizer_with_bos
-        assert self.tokenizer is not None  # keep mypy happy
         self.tokenizer.padding_side = default_padding_side
 
         # Some tokenizers doesn't automatically prepend the BOS token even when they are initialized
@@ -1121,7 +1124,7 @@ class HookedTransformer(HookedRootModule):
         refactor_factored_attn_matrices: bool = False,
         checkpoint_index: Optional[int] = None,
         checkpoint_value: Optional[int] = None,
-        hf_model: Optional[AutoModelForCausalLM] = None,
+        hf_model: Optional[Any] = None,
         device: Optional[Union[str, torch.device]] = None,
         n_devices: int = 1,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -1282,6 +1285,7 @@ class HookedTransformer(HookedRootModule):
         ), "Quantization not supported"
 
         if hf_model is not None:
+            assert hf_model.config is not None
             hf_cfg = hf_model.config.to_dict()
             qc = hf_cfg.get("quantization_config", {})
             load_in_4bit = qc.get("load_in_4bit", False)
@@ -2232,7 +2236,7 @@ class HookedTransformer(HookedRootModule):
             # Currently nothing in HookedTransformer changes with eval, but this is here in case
             # that changes in the future.
             self.eval()
-            sampled_tokens_list = []
+            sampled_tokens_list: List[torch.Tensor] = []
             for index in tqdm.tqdm(range(max_new_tokens), disable=not verbose):
                 pos_offset = self.get_pos_offset(past_kv_cache, batch_size)
 
@@ -2292,6 +2296,7 @@ class HookedTransformer(HookedRootModule):
                         "str",
                         "tokens",
                     ]:  # Those types of inputs support frequency penalty
+                        assert input_tokens is not None
                         sampled_tokens = utils.sample_logits(
                             final_logits,
                             top_k=top_k,
@@ -2332,6 +2337,7 @@ class HookedTransformer(HookedRootModule):
 
             sampled_tokens = torch.cat(sampled_tokens_list, dim=1)
             if input_type in ["str", "tokens"]:
+                assert input_tokens is not None
                 output_tokens = torch.cat((input_tokens, sampled_tokens), dim=1)
             else:
                 output_tokens = sampled_tokens
