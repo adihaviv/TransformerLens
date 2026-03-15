@@ -22,6 +22,7 @@ from .bert_nsp_head import BertNSPHead
 from .bert_pooler import BertPooler
 from .embed import Embed
 from .grouped_query_attention import GroupedQueryAttention
+from .grouped_query_cross_attention import GroupedQueryCrossAttention
 from .mlps.gated_mlp import GatedMLP
 from .mlps.mlp import MLP
 
